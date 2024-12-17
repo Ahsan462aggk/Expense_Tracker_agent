@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  expense_tracker:
+    build:
+      context: ./expense_tracker_agent
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./expense_tracker_agent:/code
+    depends_on:
+      - postgres_expense_db
+    ports:
+      - "8090:8000"
+
+  postgres_expense_db:
+    image: postgres:latest
+    restart: always
+    container_name: postgres_exp_db
+    environment:
+      - POSTGRES_USER=ziakhan
+      - POSTGRES_PASSWORD=my_password
+      - POSTGRES_DB=mydatabase
+    ports:
+      - "5444:5432"
+    volumes:
+      - postgres_expense_db:/var/lib/postgresql/data
+
+volumes:
+  postgres_expense_db:
+    driver: local
+networks:
+  default:
+    driver: bridge    
