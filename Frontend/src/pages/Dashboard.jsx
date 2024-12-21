@@ -97,7 +97,7 @@ const Dashboard = () => {
           
           <DashboardCard 
             icon={<SparklesIcon className="w-8 h-8" />}
-            title="AI Assistant"
+            title="AI Agent"
             action
             actionText="Chat Now"
             actionLink="/agent"

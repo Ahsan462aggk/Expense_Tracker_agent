@@ -16,7 +16,7 @@ const ExpenseList = () => {
         throw new Error('Failed to fetch expenses');
       }
       const data = await response.json();
-      setExpenses(data);
+      setExpenses(data.reverse());
     } catch (error) {
       console.error('Failed to fetch expenses:', error);
     } finally {

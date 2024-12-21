@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Sparkles, Bot } from 'lucide-react';
 import LoadingSpinner from './LoadingSpinner';
+import ExpenseList from './ExpenseList';
 
 const ChatBox = () => {
   const [message, setMessage] = useState('');
@@ -14,31 +15,26 @@ const ChatBox = () => {
   // Typing effect function
   const typeResponse = (text) => {
     let currentIndex = 0;
-
-    // Clear any existing typing timer
     if (typingTimerRef.current) {
       clearInterval(typingTimerRef.current);
     }
-
     typingTimerRef.current = setInterval(() => {
       if (currentIndex <= text.length) {
         setDisplayedResponse(text.slice(0, currentIndex));
         currentIndex++;
       } else {
         clearInterval(typingTimerRef.current);
-        // Add the full response to chat history after typing is complete
         const agentMessageObj = { type: 'agent', text };
         setChatHistory((prev) => [...prev, agentMessageObj]);
         setDisplayedResponse('');
       }
-    }, 20); // Adjust typing speed here (milliseconds per character)
+    }, 20);
   };
 
   const handleInteract = async (e) => {
     e.preventDefault();
     if (message.trim() === '') return;
 
-    // Add user message to chat history
     const userMessage = { type: 'user', text: message };
     setChatHistory((prev) => [...prev, userMessage]);
 
@@ -48,30 +44,24 @@ const ChatBox = () => {
     try {
       const response = await fetch('http://localhost:8090/agents/query', {
         method: 'POST',
-        credentials: 'include', 
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          // If your backend requires the access token in the Authorization header, uncomment the next line
-          // 'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({ messages: message }),
       });
 
       if (!response.ok) {
-        // Handle HTTP errors
         const errorData = await response.json();
         throw new Error(errorData.detail || 'Failed to get response from AI Agent.');
       }
 
       const data = await response.json();
-
-      // Start typing effect instead of immediately adding to chat history
       typeResponse(data.response);
     } catch (err) {
       console.error('AI Agent interaction failed:', err);
       const errorMsg = err.message || 'Failed to get response from AI Agent.';
       setError(errorMsg);
-
       const errorMessageObj = { type: 'error', text: errorMsg };
       setChatHistory((prev) => [...prev, errorMessageObj]);
     } finally {
@@ -126,18 +116,22 @@ const ChatBox = () => {
   };
 
   return (
-    <div className="mt-16 flex items-center justify-center p-4">
-      <div className="w-full max-w-3xl bg-white shadow-xl rounded-xl overflow-hidden">
+    <div className="mt-16 p-4 md:flex md:space-x-4" style={{ maxHeight: '600px' }}>
+      {/* Left Column: ChatBox */}
+      <div 
+        className="w-full md:w-2/3 bg-white shadow-xl rounded-xl overflow-hidden mb-4 md:mb-0 flex flex-col" 
+        style={{ maxHeight: '600px' }}
+      >
         {/* Header */}
         <div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-4 flex items-center">
           <Bot className="mr-2 text-white" size={24} />
-          <h2 className="text-xl font-bold text-white">AI Assistant</h2>
+          <h2 className="text-xl font-bold text-white">AI Agent</h2>
         </div>
 
         {/* Chat Area */}
-        <div className="p-4 space-y-3">
-          <div className="h-72 overflow-y-auto border border-gray-200 rounded-lg p-3">
-            {chatHistory.length === 0 ? (
+        <div className="p-4 space-y-3 flex flex-col h-full">
+          <div className="flex-grow overflow-y-auto border border-gray-200 rounded-lg p-3">
+            {chatHistory.length === 0 && !loading && !displayedResponse ? (
               <div className="text-center text-gray-500 flex flex-col items-center justify-center h-full">
                 <Sparkles className="text-indigo-500 mb-2" size={32} />
                 <p>Ask me anything about your expenses!</p>
@@ -195,6 +189,20 @@ const ChatBox = () => {
               {error}
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Right Column: Expense List */}
+      <div 
+        className="w-full md:w-1/2 flex flex-col bg-white shadow-xl rounded-xl overflow-hidden border border-gray-100" 
+        style={{ maxHeight: '600px' }}
+      >
+        <div className="bg-gray-100 p-4 border-b border-gray-200">
+          <h3 className="text-lg font-bold text-gray-800">Your Expenses</h3>
+          <p className="text-sm text-gray-500">View, edit, and delete your expenses</p>
+        </div>
+        <div className="flex-grow overflow-y-auto p-4">
+          <ExpenseList />
         </div>
       </div>
     </div>
