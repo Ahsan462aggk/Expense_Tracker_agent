@@ -7,6 +7,6 @@ class Expense(SQLModel, table=True):
     amount: float
     description: str
     category: str
-    date:datetime  # Automatically set the current UTC time if not provided
+    date: datetime = Field(default_factory=datetime.utcnow)   # Automatically set the current UTC time if not provided
     user_id: int = Field(default=None, foreign_key="user.id") # Foreign key to User
     user: Optional["User"] = Relationship(back_populates="expenses") # Relationship to user

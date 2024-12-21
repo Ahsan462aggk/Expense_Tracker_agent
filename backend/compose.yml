@@ -3,10 +3,10 @@ version: '3.8'
 services:
   expense_tracker:
     build:
-      context: ./expense_tracker_agent
+      context: ./expense_tracker
       dockerfile: Dockerfile.dev
     volumes:
-      - ./expense_tracker_agent:/code
+      - ./expense_tracker:/code
     depends_on:
       - postgres_expense_db
     ports:

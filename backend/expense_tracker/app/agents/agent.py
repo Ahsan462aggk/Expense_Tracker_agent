@@ -1,4 +1,5 @@
 # app/agents/agent.py
+
 import os
 import sys
 import traceback
@@ -16,8 +17,8 @@ from datetime import datetime
 from app.controllers.expense_controller import (
     get_expenses,
     create_expense,
-    update_expense,
-    delete_expense,
+    update_expenses_by_category,
+    delete_expenses_by_category,
     get_expenses_by_category
 )
 from app.schemas.expense import ExpenseCreate, ExpenseUpdate
@@ -25,11 +26,17 @@ import arrow
 
 import logging
 from app.models.expense import Expense
+from app.models.user import User
 
 # Memory Imports
 from langchain_core.messages import RemoveMessage
 from langgraph.checkpoint.memory import MemorySaver
- # Ensure IPython is installed
+# Ensure IPython is installed
+
+import contextvars  # Import contextvars
+
+# Define a Context Variable for user_id
+current_user_id: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar("current_user_id", default=None)
 
 # Load environment variables
 load_dotenv()
@@ -62,6 +69,7 @@ except Exception as e:
 # Define Tool Functions
 import dateparser  # Ensure dateparser is installed and imported
 
+
 def tool_get_expenses(
     category: Optional[str] = None,
     start_date: Optional[str] = None,
@@ -83,6 +91,11 @@ def tool_get_expenses(
     Returns:
         str: A string containing the list of expenses and the total amount in plain text.
     """
+    user_id = current_user_id.get()
+    if not user_id:
+        logger.error("User ID is not set in the context.")
+        return "Error: User ID is missing."
+
     try:
         # Parse the date strings into datetime objects
         parsed_start_date = dateparser.parse(start_date) if start_date else None
@@ -103,8 +116,14 @@ def tool_get_expenses(
             return "Error: Start date cannot be after end date."
 
         with Session(engine) as session:
+            # Fetch the User object based on user_id
+            current_user = session.get(User, user_id)
+            if not current_user:
+                logger.error(f"User with ID {user_id} not found.")
+                return "Error: User not found."
+
             # Start building the query
-            statement = select(Expense)
+            statement = select(Expense).where(Expense.user_id == user_id)
             filters = []
 
             # Apply category filter if provided
@@ -156,13 +175,13 @@ def tool_get_expenses(
         logger.error(traceback.format_exc())
         return f"Error retrieving expenses: {str(e)}"
 
-def tool_create_expenses(amount: float, category: str, user_id:Optional[int] = None, description: Optional[str] = None) -> Dict[str, Any]:
+
+def tool_create_expenses(amount: float, category: str, description: Optional[str] = None) -> Dict[str, Any]:
     """
     Create a new expense entry in the database.
 
     Args:
         amount (float): The monetary amount of the expense.
-        Optional[int] = None: The user ID of the user associated with the expense.
         category (str): The category for the expense.
         description (Optional[str]): An optional brief description of the expense.
 
@@ -170,6 +189,11 @@ def tool_create_expenses(amount: float, category: str, user_id:Optional[int] = N
         Dict[str, Any]: A dictionary containing the details of the created expense.
                         Returns an error message dictionary if an exception occurs.
     """
+    user_id = current_user_id.get()
+    if not user_id:
+        logger.error("User ID is not set in the context.")
+        return {"status": "error", "message": "User ID is missing."}
+
     try:
         # Add the current date to the expense data
         current_date = datetime.now()
@@ -188,6 +212,7 @@ def tool_create_expenses(amount: float, category: str, user_id:Optional[int] = N
             session.commit()
             session.refresh(db_expense)
 
+        logger.info(f"Created expense: {db_expense}")
         return {
             "status": "success",
             "message": "Expense stored successfully.",
@@ -196,44 +221,77 @@ def tool_create_expenses(amount: float, category: str, user_id:Optional[int] = N
 
     except Exception as e:
         logger.error(f"Error in tool_create_expenses: {e}")
+        logger.error(traceback.format_exc())
         return {"status": "error", "message": str(e)}
+
 
 def tool_update_expenses(
     category: str,
-    id: Optional[int] = None,
     description: Optional[str] = None,
     amount: Optional[float] = None,
-    user_id: Optional[int] = None,
     date: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Update existing expenses in the database based on category
+    Update all expenses under a specific category for the current user.
 
     Args:
-        description (Optional[str]): The description for the expenses in the category.
-        amount (Optional[float]): The new amount for the expenses in the category.
-        user_id (Optional[int]): The user ID associated with the expenses in the category.
         category (str): The category whose expenses need to be updated.
-        date Optional[str] = None: the Date associated with the expense in the category
-        id Optional[int]: the expense_id associated with the expense in the category
+        description (Optional[str]): The new description for the expense.
+        amount (Optional[float]): The new amount for the expense.
+        date (Optional[str]): The new date for the expense.
 
     Returns:
         Dict[str, Any]: A dictionary containing the details of the updated expenses.
-            Returns an error message dictionary if an exception occurs.
+                        Returns an error message dictionary if an exception occurs.
     """
+    user_id = current_user_id.get()
+    if not user_id:
+        logger.error("User ID is not set in the context.")
+        return {"status": "error", "message": "User ID is missing."}
+
     try:
         if date:
-            # Parse the provided date and move it to the next day, then format it
-            date = arrow.get(date).shift(days=1).format('YYYY-MM-DDTHH:mm:ss.SSS') + "Z"
-        expense_update = ExpenseUpdate(description=description, amount=amount, user_id=user_id, category=category, date=date, id=id)
+            # Parse the provided date and adjust it as needed
+            parsed_date = dateparser.parse(date)
+            if not parsed_date:
+                logger.error(f"Failed to parse date: {date}")
+                return {"status": "error", "message": f"Unable to parse the date '{date}'."}
+            # Format the date as needed, e.g., ISO format
+            formatted_date = parsed_date.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        else:
+            formatted_date = None
+
+        # Initialize ExpenseUpdate without the 'id' field
+        expense_update = ExpenseUpdate(
+            description=description,
+            amount=amount,
+            category=category,
+            date=formatted_date
+        )
+
         with Session(engine) as session:
-            updated_expenses = update_expense(session, category, expense_update)
+            # Fetch the User object based on user_id
+            current_user = session.get(User, user_id)
+            if not current_user:
+                logger.error(f"User with ID {user_id} not found.")
+                return {"status": "error", "message": "User not found."}
+
+            updated_expenses = update_expenses_by_category(session, category, expense_update, current_user)
             logger.debug(f"Updated expenses in category '{category}': {updated_expenses}")
-        return updated_expenses
+
+        return {
+            "status": "success",
+            "message": f"Updated {len(updated_expenses)} expenses in category '{category}'.",
+            "data": [expense.dict() for expense in updated_expenses]
+        }
+    except HTTPException as he:
+        logger.error(f"HTTP error in tool_update_expenses: {he.detail}")
+        return {"status": "error", "message": he.detail}
     except Exception as e:
         logger.error(f"Error in tool_update_expenses: {e}")
         logger.error(traceback.format_exc())
         return {"status": "error", "message": str(e)}
+
 
 def tool_delete_expenses(category: str) -> Dict[str, Any]:
     """
@@ -244,19 +302,31 @@ def tool_delete_expenses(category: str) -> Dict[str, Any]:
 
     Returns:
         Dict[str, Any]: A dictionary confirming the deletion of expenses in the specified category.
-            Returns an error message dictionary if an exception occurs.
+                        Returns an error message dictionary if an exception occurs.
     """
+    user_id = current_user_id.get()
+    if not user_id:
+        logger.error("User ID is not set in the context.")
+        return {"status": "error", "message": "User ID is missing."}
+
     try:
         with Session(engine) as session:
-            deleted_expenses = delete_expense(session, category)
-            logger.debug(f"Deleted {len(deleted_expenses)} expenses in category '{category}'")
+            # Fetch the User object based on user_id
+            current_user = session.get(User, user_id)
+            if not current_user:
+                logger.error(f"User with ID {user_id} not found.")
+                return {"status": "error", "message": "User not found."}
+
+            deletion_result = delete_expenses_by_category(session, category, current_user)
+            logger.debug(f"Deletion result for category '{category}': {deletion_result}")
 
         return {
             "status": "success",
-            "message": f"All expenses in category '{category}' have been deleted.",
-            "data": deleted_expenses
+            "message": deletion_result["message"]
         }
-
+    except HTTPException as he:
+        logger.error(f"HTTP error in tool_delete_expenses: {he.detail}")
+        return {"status": "error", "message": he.detail}
     except Exception as e:
         logger.error(f"Error in tool_delete_expenses: {e}")
         logger.error(traceback.format_exc())
@@ -338,7 +408,7 @@ or similar variations, please extract and return only the `user_id` as an intege
    **Assistant:** All expenses in the "Travel" category have been deleted successfully.
 
 6. When a user provides an input like "I just bought a new bike for $900," recognize the implicit intent to create an expense.
-   If the user confirms ("Yes"), extract the following details:
+   If the user confirms ("Yes"), extract the following details using its intelligence:
    - **Description:** Use contextual keywords to derive a meaningful description (e.g., "New bike").
    - **Amount:** Parse and extract the numerical value from the user's input (e.g., "$900").
    - **Category:** Based on the description or context, automatically infer an appropriate category (e.g., "Transportation").
@@ -381,49 +451,68 @@ or similar variations, please extract and return only the `user_id` as an intege
       Expense updated successfully.
 """)
 
+
 # Define Assistant Node
 from langgraph.graph import MessagesState
 from typing import TypedDict
 from typing import Annotated
-from langgraph.graph.message import add_messages,AnyMessage
+from langgraph.graph.message import add_messages, AnyMessage
+
 
 class State(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     summary: str
-def assistant(state: State) -> State:
 
+
+def assistant(state: State) -> State:
+    """
+    The main assistant function that processes incoming messages,
+    invokes the LLM with the bound tools, and returns the updated state.
+
+    Args:
+        state (State): The current state containing messages and summary.
+
+    Returns:
+        State: The updated state with new messages.
+    """
     # Get summary if it exists
     summary = state.get("summary", "")
 
     # If there is summary, then we add it
     if summary:
-
         # Add summary to system message
         system_message = f"Summary of conversation earlier: {summary}\n\n{sys_msg.content}"
 
         # Append summary to any newer messages
         messages = [SystemMessage(content=system_message)] + state["messages"]
-
     else:
-        messages =[sys_msg]+ state["messages"]
+        messages = [sys_msg] + state["messages"]
+
     response = llm_with_tools.invoke(messages)
     return {"messages": response}
-    
+
+
 # Memory Functions
 def summarize_conversation(state: State):
+    """
+    Summarizes the conversation when it exceeds a certain length to maintain context.
 
+    Args:
+        state (State): The current state containing messages and summary.
+
+    Returns:
+        Dict[str, Any]: Updated state with the new summary and pruned messages.
+    """
     # First, we get any existing summary
     summary = state.get("summary", "")
 
     # Create our summarization prompt
     if summary:
-
         # A summary already exists
         summary_message = (
             f"This is summary of the conversation to date: {summary}\n\n"
             "Extend the summary by taking into account the new messages above:"
         )
-
     else:
         summary_message = "Create a summary of the conversation above:"
 
@@ -434,10 +523,18 @@ def summarize_conversation(state: State):
     # Delete all but the 2 most recent messages
     delete_messages = [RemoveMessage(id=m.id) for m in state["messages"][:-2]]
     return {"summary": response.content, "messages": delete_messages}
+
+
 def should_continue(state: State):
+    """
+    Determines whether the conversation should continue or be summarized.
 
-    """Return the next node to execute."""
+    Args:
+        state (State): The current state containing messages and summary.
 
+    Returns:
+        str: The next node to execute ("summarize_conversation" or END).
+    """
     messages = state["messages"]
 
     # If there are more than six messages, then we summarize the conversation
@@ -446,6 +543,7 @@ def should_continue(state: State):
 
     # Otherwise we can just end
     return END
+
 
 # Define the unified LangGraph Agent with Memory
 builder = StateGraph(State)
@@ -466,7 +564,7 @@ builder.add_conditional_edges("assistant", tools_condition)
 builder.add_edge("tools", "assistant")
 
 # After assistant, decide whether to summarize or continue
-builder.add_conditional_edges("assistant",should_continue )
+builder.add_conditional_edges("assistant", should_continue)
 
 builder.add_edge("summarize_conversation", END)
 
@@ -478,5 +576,4 @@ try:
 except Exception as e:
     logger.error(f"Failed to compile the unified LangGraph agent: {e}")
     logger.error(traceback.format_exc())
-    sys.exit(1)  
-
+    sys.exit(1)

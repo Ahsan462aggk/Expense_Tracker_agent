@@ -1,15 +1,17 @@
+# app/routers/agent_router.py
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from app.schemas.agent import AgentQueryRequest, AgentQueryResponse
-from app.agents.agent import compiled_graph  # Import react_graph from agent.py
+from app.agents.agent import compiled_graph, current_user_id  # Import current_user_id
 import logging
 from langchain.schema import HumanMessage, AIMessage, SystemMessage
 from app.auth.auth import get_current_user
-from app.models.user import User  # Import get_current_user from auth.auth
+from app.models.user import User
+import contextvars
 
 router = APIRouter(prefix="/agents", tags=["Agents"])
 
 logger = logging.getLogger(__name__)
-
 
 @router.post("/query", response_model=AgentQueryResponse)
 async def query_agent(
@@ -49,8 +51,16 @@ async def query_agent(
         logger.info(f"Received user message from {current_user.username}: {user_message}")
         logger.info(f"Message structure before invoking the graph: {messages}")
 
-        # Invoke the graph and get the response
-        response_state = compiled_graph.invoke({"messages": messages}, config)
+        # Set the user_id in the ContextVar
+        token = current_user_id.set(current_user.id)
+
+        try:
+            # Invoke the graph and get the response
+            response_state = compiled_graph.invoke({"messages": messages}, config)
+        finally:
+            # Reset the ContextVar to its previous state
+            current_user_id.reset(token)
+
         logger.info(f"Agent response state: {response_state}")
 
         # Extract messages from the response
